@@ -6,10 +6,9 @@ from charset_normalizer import from_path
 # Encode with a trie-like dictionary for fast string matching (instead of checking each string as a whole, enumerate each character to see if it exists in the tree)
 # Decode with a simple array for fast indexing
 # Fix the size of the dictionary to be a certain bit length (ensure each taken takes a fixed number of bits), keep track of the least recently used index and replace it when a new entry is added if the dictionary is full
-# Use a bitstream instead of bytes to reduce file size
 
 # Takes a file to encode, compresses it via LZW, and saves the result as a binary file
-def encode(encode_file, result_file):
+def encode(encode_file, result_file, encode_bits = 16):
     
     # Check if file exists
     if not os.path.exists(encode_file):
@@ -25,6 +24,9 @@ def encode(encode_file, result_file):
     dictionary = {bytes([i]): i for i in range(256)}
     next_index = 256
     encode_string = b''
+
+    bit_buffer = 0  # Holds encoded bits
+    buffer_size = 0 # The number of relevant bits in the buffer
     
     with open(result_file, 'wb') as cf:
         # Encode the contents
@@ -40,7 +42,17 @@ def encode(encode_file, result_file):
 
             if encode_string not in dictionary:
                 # Write the token to the compressed file
-                cf.write(dictionary[encode_string[:-1]].to_bytes(2, 'big'))
+                # Add token bits to the buffer
+                bit_buffer = (bit_buffer << encode_bits) | dictionary[encode_string[:-1]]
+                buffer_size += encode_bits
+
+                # While there are enough bits to form a byte
+                while buffer_size >= 8:
+                    # Write the leftmost byte to the file
+                    buffer_size -= 8
+                    cf.write(bytes([bit_buffer >> buffer_size]))
+                    bit_buffer &= ((1 << buffer_size) - 1)
+
                 dictionary[encode_string] = next_index
 
                 encode_string = next_char
@@ -48,14 +60,24 @@ def encode(encode_file, result_file):
         
         # Write the leftover string
         if encode_string:
-            cf.write(dictionary[encode_string].to_bytes(2, 'big'))
+            bit_buffer = (bit_buffer << encode_bits) | dictionary[encode_string]
+            buffer_size += encode_bits
+
+            while buffer_size >= 8:
+                buffer_size -= 8
+                cf.write(bytes([bit_buffer >> buffer_size]))
+                bit_buffer &= ((1 << buffer_size) - 1)
+            
+            # Pad the final bits to form a byte
+            if buffer_size > 0:
+                cf.write(bytes([(bit_buffer << (8 - buffer_size))]))
     
     f.close()
 
     print(f"Encoded File Size: {os.path.getsize(result_file)} bytes\n")
 
 # Takes a compressed binary file to decode, decompresses it via LZW, and saves the result
-def decode(compressed_file, result_file):
+def decode(compressed_file, result_file, encode_bits = 16):
 
     # Check if file exists
     if not os.path.exists(compressed_file):
@@ -70,24 +92,49 @@ def decode(compressed_file, result_file):
     # Initialise the dictionary with 256 bytes
     dictionary = [bytes([i]) for i in range(256)]
     length = 256
-    # Each token is 2 bytes representing an index
-    next_token = int.from_bytes(f.read(2), 'big')
 
+    bit_buffer = 0  # Holds encoded bits
+    buffer_size = 0 # The number of relevant bits in the buffer
+
+    # Read bytes until there are enough bits to form a token
+    while buffer_size < encode_bits:
+        bit_buffer = (bit_buffer << 8) | f.read(1)[0]
+        buffer_size += 8
+    
+    # Extract the first token from the buffer
+    buffer_size -= encode_bits
+    next_token = (bit_buffer >> buffer_size)
+    bit_buffer &= ((1 << buffer_size) - 1)
     prev_string = dictionary[next_token]
 
     with open(result_file, 'wb') as rf:
+
         # Write the first decoded string
         rf.write(prev_string)
+        eof = False
 
         while True:
             # Process the next token
-            next_token = f.read(2)
+            # Read bytes until there are enough bits to form a token
+            while buffer_size < encode_bits:
+                byte = f.read(1)
 
-            # End of file
-            if not next_token:
+                # End of file
+                if not byte:
+                    eof = True
+                    break
+
+                bit_buffer = (bit_buffer << 8) | byte[0]
+                buffer_size += 8
+
+            # Extract the next token if possible
+            if buffer_size >= encode_bits:
+                buffer_size -= encode_bits
+                next_token = (bit_buffer >> buffer_size)
+                bit_buffer &= ((1 << buffer_size) - 1)
+
+            elif eof:
                 break
-            
-            next_token = int.from_bytes(next_token, 'big')
 
             if next_token < length: # String matches an entry from before t-1
                 decoded_string = dictionary[next_token]
@@ -153,18 +200,8 @@ def main():
             decode(file_path, result_file)
         
         elif command == "test":
-            file_path = input("Enter file path to open and print: ")
-            compressed = []
-
-            with open(file_path, 'rb') as f:
-                while True:
-                    bytes_read = f.read(2)
-                    if not bytes_read:
-                        break
-                    compressed.append(int.from_bytes(bytes_read, byteorder='big'))
-            print(compressed[:100])
+            print(bin((0 << 10) | 50))
             
-
         elif command == "exit":
             return
 
