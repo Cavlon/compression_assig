@@ -3,12 +3,10 @@ import chardet
 from charset_normalizer import from_path
 
 ## IDEAS
-# Encode with a trie-like dictionary for fast string matching (instead of checking each string as a whole, enumerate each character to see if it exists in the tree)
-# Decode with a simple array for fast indexing
 # Fix the size of the dictionary to be a certain bit length (ensure each taken takes a fixed number of bits), keep track of the least recently used index and replace it when a new entry is added if the dictionary is full
 
 # Takes a file to encode, compresses it via LZW, and saves the result as a binary file
-def encode(encode_file, result_file, encode_bits = 16):
+def encode(encode_file, result_file):
     
     # Check if file exists
     if not os.path.exists(encode_file):
@@ -25,6 +23,7 @@ def encode(encode_file, result_file, encode_bits = 16):
     next_index = 256
     encode_string = b''
 
+    encode_bits = 9
     bit_buffer = 0  # Holds encoded bits
     buffer_size = 0 # The number of relevant bits in the buffer
     
@@ -57,6 +56,10 @@ def encode(encode_file, result_file, encode_bits = 16):
 
                 encode_string = next_char
                 next_index += 1
+
+                # Assign more token bits if dictionary is too large
+                if next_index >= (1 << encode_bits):
+                    encode_bits += 1
         
         # Write the leftover string
         if encode_string:
@@ -77,7 +80,7 @@ def encode(encode_file, result_file, encode_bits = 16):
     print(f"Encoded File Size: {os.path.getsize(result_file)} bytes\n")
 
 # Takes a compressed binary file to decode, decompresses it via LZW, and saves the result
-def decode(compressed_file, result_file, encode_bits = 16):
+def decode(compressed_file, result_file):
 
     # Check if file exists
     if not os.path.exists(compressed_file):
@@ -93,6 +96,7 @@ def decode(compressed_file, result_file, encode_bits = 16):
     dictionary = [bytes([i]) for i in range(256)]
     length = 256
 
+    encode_bits = 9
     bit_buffer = 0  # Holds encoded bits
     buffer_size = 0 # The number of relevant bits in the buffer
 
@@ -146,6 +150,10 @@ def decode(compressed_file, result_file, encode_bits = 16):
             dictionary.append(prev_string + decoded_string[:1])
             prev_string = decoded_string
             length += 1
+            
+            # Sync up when token bits would increase (decompressor is 1 step behind so it needs to check next length)
+            if length + 1 >= (1 << encode_bits):
+                    encode_bits += 1
     
     f.close()
 
