@@ -2,9 +2,6 @@ import os
 import heapq
 
 ## IDEAS
-# Add a compare command that compares whether 2 files have the same contents
-# Add an encode-then-decode command that performs both functions in 1 command
-# Add batch encoding/decoding functionality by taking a directory
 # Add LRU considering the prefixes of the matched string as well
 
 def encode_ttl(encode_file, result_file, max_bits = 16):
@@ -468,7 +465,7 @@ def decode(compressed_file, result_file):
 
 def main():
     while True:
-        command = input("Enter a command (print, encode, decode, or exit): ").lower()
+        command = input("Enter a command (print, compare, encode, decode, e+d, or exit): ").lower()
 
         # Open and print file
         if command == "print":
@@ -500,27 +497,105 @@ def main():
             else:
                 print("File not found")
         
+        # Compare 2 files to see if the contents match
+        elif command == "compare":
+            file_path1 = input("Enter 1st file path to compare: ")
+            file_path2 = input("Enter 2nd file path to compare: ")
+
+            # Check if the files exist
+            if os.path.exists(file_path1) and os.path.exists(file_path2):
+                try:
+                    with open(file_path1, 'rb') as f1, open(file_path2, 'rb') as f2:
+                        same = True
+
+                        # Check each byte matches
+                        while True:
+                            byte1 = f1.read(1)
+                            byte2 = f2.read(1)
+
+                            if not byte1 or not byte2:
+                                if byte1 or byte2:
+                                    same = False
+                                break
+
+                            if byte1 != byte2:
+                                same = False
+                                break
+                        
+                        print(f"Files are the same = {same}")
+
+                except Exception as e:
+                    print("Error reading file")
+            else:
+                print("File not found")
+
         # Compress file and save it
         elif command == "encode":
             file_path = input("Enter file path to encode: ")
             result_file = input("Enter name of resultant encoded file: ")
             method = int(input("Encoding Method 1 or 2? "))
-            if method == 1:
-                encode(file_path, result_file)
-            else:
+            if method == 2:
                 max_bits = int(input("Max Token Bits? "))
-                encode_ttl(file_path, result_file, max_bits)
+
+            if os.path.isfile(file_path) == True:
+                if method == 1:
+                    encode(file_path, result_file)
+                else:   
+                    encode_ttl(file_path, result_file, max_bits)
+            else:
+                # Encode all files in a directory
+                for file in os.listdir(file_path):
+                    if method == 1:
+                        encode(file_path + "/" + file, result_file + "/" + file + ".lzw")
+                    else:   
+                        encode_ttl(file_path + "/" + file, result_file + "/" + file + ".lzw", max_bits)
         
         # Decompress file and save it
         elif command == "decode":
             file_path = input("Enter file path to decode: ")
             result_file = input("Enter name of resultant decoded file: ")
             method = int(input("Encoding Method 1 or 2? "))
-            if method == 1:
-                decode(file_path, result_file)
-            else:
+            if method == 2:
                 max_bits = int(input("Max Token Bits? "))
-                decode_ttl(file_path, result_file, max_bits)
+
+            if os.path.isfile(file_path) == True:
+                if method == 1:
+                    decode(file_path, result_file)
+                else:   
+                    decode_ttl(file_path, result_file, max_bits)
+            else:
+                # Decode all files in a directory
+                for file in os.listdir(file_path):
+                    if method == 1:
+                        decode(file_path + "/" + file, result_file + "/" + file[:-4])
+                    else:   
+                        decode_ttl(file_path + "/" + file, result_file + "/" + file[:-4], max_bits)
+        
+        # Encode then decode
+        elif command == "e+d":
+            file_path = input("Enter file path to process: ")
+            inter_path = input("Enter file path for encoded file: ")
+            result_file = input("Enter name of resultant file: ")
+            method = int(input("Encoding Method 1 or 2? "))
+            if method == 2:
+                max_bits = int(input("Max Token Bits? "))
+
+            if os.path.isfile(file_path) == True:
+                if method == 1:
+                    encode(file_path, inter_path)
+                    decode(inter_path, result_file)
+                else:   
+                    encode_ttl(file_path, inter_path, max_bits)
+                    decode_ttl(inter_path, result_file, max_bits)
+            else:
+                # Encode and decode all files in a directory
+                for file in os.listdir(file_path):
+                    if method == 1:
+                        encode(file_path + "/" + file, inter_path + "/" + file + ".lzw")
+                        decode(inter_path + "/" + file + ".lzw", result_file + "/" + file)
+                    else:   
+                        encode_ttl(file_path + "/" + file, inter_path + "/" + file + ".lzw", max_bits)
+                        decode_ttl(inter_path + "/" + file + ".lzw", result_file + "/" + file, max_bits)
         
         elif command == "test":
             print(bin((0 << 10) | 50))
