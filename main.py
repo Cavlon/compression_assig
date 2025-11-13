@@ -1,9 +1,226 @@
 import os
 import heapq
+from collections import OrderedDict
 
 ## IDEAS
-# Add LRU considering the prefixes of the matched string as well
+# Add empty file handling
 
+# Encodes a file with LZW/LRU
+def encode_lru(encode_file, result_file, max_bits = 16):
+    
+    # Check if file exists
+    if not os.path.exists(encode_file):
+        print("File not found")
+        return
+
+    f = open(encode_file, 'rb')
+
+    print(f"\nEncoding file: {encode_file}")
+    print(f"File Size: {os.path.getsize(encode_file)} bytes\n")
+
+    # Initialise the dictionary with 256 bytes
+    fixed_dictionary = {bytes([i]): i for i in range(256)}
+    dictionary = OrderedDict()
+
+    full = False
+    next_index = 256
+    encode_string = f.read(1)
+
+    encode_bits = 9
+    bit_buffer = 0  # Holds encoded bits
+    buffer_size = 0 # The number of relevant bits in the buffer
+    
+    with open(result_file, 'wb') as cf:
+        # Encode the contents
+        while True:
+            # Process the next byte
+            next_char = f.read(1)
+
+            # End of file
+            if not next_char:
+                break
+            
+            encode_string += next_char
+
+            if encode_string not in dictionary:
+                # Write the token to the compressed file
+
+                match_string = encode_string[:-1]
+                if len(match_string) == 1:
+                    match_index = fixed_dictionary[match_string]
+                else:
+                    match_index = dictionary[match_string]
+                
+                # Update the recency of all prefixes of the matched string
+                if len(match_string) > 1:
+                    for i in range(2, len(match_string)):
+                        dictionary.move_to_end(match_string[:i])
+
+                # Add token bits to the buffer
+                bit_buffer = (bit_buffer << encode_bits) | match_index
+                buffer_size += encode_bits
+
+                # While there are enough bits to form a byte
+                while buffer_size >= 8:
+                    # Write the leftmost byte to the file
+                    buffer_size -= 8
+                    cf.write(bytes([bit_buffer >> buffer_size]))
+                    bit_buffer &= ((1 << buffer_size) - 1)
+
+                if full:    # Dictionary is full
+                    oldest_string, next_index = dictionary.popitem(last=False)
+                    dictionary[encode_string] = next_index
+                
+                else:
+                    dictionary[encode_string] = next_index
+                    next_index += 1
+
+                    # Assign more token bits if dictionary is too large
+                    if next_index >= (1 << encode_bits):
+                        if encode_bits == max_bits:
+                            full = True
+                        else:
+                            encode_bits += 1
+                
+                encode_string = next_char
+        
+        # Write the leftover string
+        if encode_string:
+
+            if len(encode_string) == 1:
+                match_index = fixed_dictionary[encode_string]
+            else:
+                match_index = dictionary[encode_string]
+
+            bit_buffer = (bit_buffer << encode_bits) | match_index
+            buffer_size += encode_bits
+
+            while buffer_size >= 8:
+                buffer_size -= 8
+                cf.write(bytes([bit_buffer >> buffer_size]))
+                bit_buffer &= ((1 << buffer_size) - 1)
+            
+            # Pad the final bits to form a byte
+            if buffer_size > 0:
+                cf.write(bytes([(bit_buffer << (8 - buffer_size))]))
+    
+    f.close()
+
+    print(f"Encoded File Size: {os.path.getsize(result_file)} bytes\n")
+
+# Decodes a LZW/LRU encoded file
+def decode_lru(compressed_file, result_file, max_bits = 16):
+
+    # Check if file exists
+    if not os.path.exists(compressed_file):
+        print("File not found")
+        return
+
+    f = open(compressed_file, 'rb')
+
+    print(f"\nCompressed File: {compressed_file}")
+    print(f"Compressed File Size: {os.path.getsize(compressed_file)} bytes\n")
+
+    # Initialise the dictionary with 256 bytes
+    dictionary_map = OrderedDict()
+    dictionary = [bytes([i]) for i in range(256)]
+
+    next_index = 256
+    full = False
+
+    encode_bits = 9
+    bit_buffer = 0  # Holds encoded bits
+    buffer_size = 0 # The number of relevant bits in the buffer
+
+    # Read bytes until there are enough bits to form a token
+    while buffer_size < encode_bits:
+        bit_buffer = (bit_buffer << 8) | f.read(1)[0]
+        buffer_size += 8
+    
+    # Extract the first token from the buffer
+    buffer_size -= encode_bits
+    next_token = (bit_buffer >> buffer_size)
+    bit_buffer &= ((1 << buffer_size) - 1)
+    prev_string = dictionary[next_token]
+
+    with open(result_file, 'wb') as rf:
+
+        # Write the first decoded string
+        rf.write(prev_string)
+
+        while True:
+            # Process the next token
+            # Read bytes until there are enough bits to form a token
+            while buffer_size < encode_bits:
+                byte = f.read(1)
+
+                # End of file
+                if not byte:
+                    break
+
+                bit_buffer = (bit_buffer << 8) | byte[0]
+                buffer_size += 8
+
+            # Extract the next token if possible
+            if buffer_size >= encode_bits:
+                buffer_size -= encode_bits
+                next_token = (bit_buffer >> buffer_size)
+                bit_buffer &= ((1 << buffer_size) - 1)
+            else:
+                break
+
+            if full:    # Dictionary is full
+                if next_token == next_index:    # String matches the t-1th entry
+                    decoded_string = prev_string + prev_string[:1]
+                else:                           # String matches an entry from before t-1
+                    decoded_string = dictionary[next_token]
+                
+                new_entry = prev_string + decoded_string[:1]
+
+                dictionary[next_index] = new_entry
+                dictionary_map[new_entry] = next_index
+
+            else:
+
+                if next_token < next_index: # String matches an entry from before t-1
+                    decoded_string = dictionary[next_token]
+                else:                       # String matches the t-1th entry
+                    decoded_string = prev_string + prev_string[:1]
+
+                new_entry = prev_string + decoded_string[:1]
+
+                dictionary.append(new_entry)
+                dictionary_map[new_entry] = next_index
+
+                next_index += 1
+
+                # Sync up when token bits would increase (decoder is 1 step behind so it needs to check next_index+1)
+                if next_index + 1 >= (1 << encode_bits):
+                    if encode_bits < max_bits: 
+                        encode_bits += 1
+
+                    # The dictionary is full
+                    elif next_index == (1 << max_bits):
+                        full = True
+
+            # Update the recency of all prefixes of the matched string
+            if len(decoded_string) > 1:
+                for i in range(2, len(decoded_string)):
+                    dictionary_map.move_to_end(decoded_string[:i])
+            
+            # An entry should have been replaced at this timestep in the encoder
+            if full:
+                oldest_string, next_index = dictionary_map.popitem(last=False)
+        
+            # Write the decoded string to the output file
+            rf.write(decoded_string)                
+            prev_string = decoded_string
+    
+    f.close()
+
+    print(f"File Size: {os.path.getsize(result_file)} bytes\n")
+
+# Encodes a file with LZW/Aging
 def encode_ttl(encode_file, result_file, max_bits = 16):
     
     # Check if file exists
@@ -149,7 +366,7 @@ def encode_ttl(encode_file, result_file, max_bits = 16):
 
     print(f"Encoded File Size: {os.path.getsize(result_file)} bytes\n")
 
-# Takes a compressed binary file to decode, decompresses it via LZW, and saves the result
+# Decodes a LZW/Aging encoded file
 def decode_ttl(compressed_file, result_file, max_bits = 16):
 
     # Check if file exists
@@ -533,72 +750,83 @@ def main():
         elif command == "encode":
             file_path = input("Enter file path to encode: ")
             result_file = input("Enter name of resultant encoded file: ")
-            method = int(input("Encoding Method 1 or 2? "))
-            if method == 2:
+            method = int(input("Encoding Method 1, 2, or 3? "))
+            if method != 1:
                 max_bits = int(input("Max Token Bits? "))
 
             if os.path.isfile(file_path) == True:
                 if method == 1:
                     encode(file_path, result_file)
-                else:   
+                elif method == 2:   
                     encode_ttl(file_path, result_file, max_bits)
+                else:
+                    encode_lru(file_path, result_file, max_bits)
             else:
                 # Encode all files in a directory
                 for file in os.listdir(file_path):
                     if method == 1:
                         encode(file_path + "/" + file, result_file + "/" + file + ".lzw")
-                    else:   
+                    elif method == 2:   
                         encode_ttl(file_path + "/" + file, result_file + "/" + file + ".lzw", max_bits)
+                    else:
+                        encode_lru(file_path + "/" + file, result_file + "/" + file + ".lzw", max_bits)
         
         # Decompress file and save it
         elif command == "decode":
             file_path = input("Enter file path to decode: ")
             result_file = input("Enter name of resultant decoded file: ")
-            method = int(input("Encoding Method 1 or 2? "))
-            if method == 2:
+            method = int(input("Decoding Method 1, 2, or 3? "))
+            if method != 1:
                 max_bits = int(input("Max Token Bits? "))
 
             if os.path.isfile(file_path) == True:
                 if method == 1:
                     decode(file_path, result_file)
-                else:   
+                elif method == 2:   
                     decode_ttl(file_path, result_file, max_bits)
+                else:
+                    decode_lru(file_path, result_file, max_bits)
             else:
                 # Decode all files in a directory
                 for file in os.listdir(file_path):
                     if method == 1:
                         decode(file_path + "/" + file, result_file + "/" + file[:-4])
-                    else:   
+                    elif method == 2:   
                         decode_ttl(file_path + "/" + file, result_file + "/" + file[:-4], max_bits)
+                    else:
+                        decode_lru(file_path + "/" + file, result_file + "/" + file[:-4], max_bits)
         
         # Encode then decode
         elif command == "e+d":
             file_path = input("Enter file path to process: ")
             inter_path = input("Enter file path for encoded file: ")
             result_file = input("Enter name of resultant file: ")
-            method = int(input("Encoding Method 1 or 2? "))
-            if method == 2:
+            method = int(input("Method 1, 2, or 3? "))
+            if method != 1:
                 max_bits = int(input("Max Token Bits? "))
 
             if os.path.isfile(file_path) == True:
                 if method == 1:
                     encode(file_path, inter_path)
                     decode(inter_path, result_file)
-                else:   
+                elif method == 2:   
                     encode_ttl(file_path, inter_path, max_bits)
                     decode_ttl(inter_path, result_file, max_bits)
+                else:
+                    encode_lru(file_path, inter_path, max_bits)
+                    decode_lru(inter_path, result_file, max_bits)
             else:
                 # Encode and decode all files in a directory
                 for file in os.listdir(file_path):
                     if method == 1:
                         encode(file_path + "/" + file, inter_path + "/" + file + ".lzw")
                         decode(inter_path + "/" + file + ".lzw", result_file + "/" + file)
-                    else:   
+                    elif method == 2:   
                         encode_ttl(file_path + "/" + file, inter_path + "/" + file + ".lzw", max_bits)
                         decode_ttl(inter_path + "/" + file + ".lzw", result_file + "/" + file, max_bits)
-        
-        elif command == "test":
-            print(bin((0 << 10) | 50))
+                    else:
+                        encode_lru(file_path + "/" + file, inter_path + "/" + file + ".lzw", max_bits)
+                        decode_lru(inter_path + "/" + file + ".lzw", result_file + "/" + file, max_bits)
             
         elif command == "exit":
             return
